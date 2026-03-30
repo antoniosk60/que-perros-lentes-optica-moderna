@@ -1,5 +1,5 @@
 {
   "name": "SMART LENS IZCALLI",
   "description": "Sitio web profesional para la óptica SMART LENS IZCALLI. Especialistas en lentes graduados, examen de la vista y armazones modernos.",
-  "requestFramePermissions": []
+  "requestFramePermissions": ["camera"]
 }

@@ -3,8 +3,29 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
-import { motion } from "motion/react";
+import React, { useState, useEffect, useRef, Component, ErrorInfo, ReactNode } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { 
+  auth, 
+  db, 
+  loginWithGoogle, 
+  logout, 
+  onAuthStateChanged, 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  limit, 
+  Timestamp, 
+  addDoc, 
+  handleFirestoreError, 
+  OperationType,
+  FirebaseUser,
+  serverTimestamp
+} from "./firebase";
 import { 
   Glasses, 
   Eye, 
@@ -33,7 +54,15 @@ import {
   Plus,
   Minus,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Upload,
+  RotateCw,
+  Maximize,
+  Minimize,
+  Download,
+  RefreshCw,
+  FlipHorizontal,
+  ShoppingCart
 } from "lucide-react";
 const COLORS = {
   primary: "#1e3a8a", // Deep Blue
@@ -42,7 +71,52 @@ const COLORS = {
   white: "#ffffff",
 };
 
+// Error Boundary Component
+class ErrorBoundary extends React.Component<any, any> {
+  state = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+          <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full text-center border border-slate-100">
+            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+              <AlertCircle className="w-8 h-8" />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900 mb-4">¡Ups! Ha ocurrido un error</h2>
+            <p className="text-slate-600 mb-8">Algo salió mal. Por favor, intenta de nuevo más tarde.</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition-all"
+            >
+              Recargar página
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (this as any).props.children;
+  }
+}
+
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <MainApp />
+    </ErrorBoundary>
+  );
+}
+
+function MainApp() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const [isBookingOpen, setIsBookingOpen] = useState(false);
@@ -50,72 +124,253 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [selectedFrame, setSelectedFrame] = useState(0);
+  const [frameScale, setFrameScale] = useState(1);
+  const [frameRotation, setFrameRotation] = useState(0);
+  const [frameColor, setFrameColor] = useState("#0f172a");
+  const [lensTint, setLensTint] = useState("transparent");
+  const [isMirrored, setIsMirrored] = useState(true);
+  const [isWebcamActive, setIsWebcamActive] = useState(false);
   
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [cart, setCart] = useState<any[]>([]);
   const [tryOnImage, setTryOnImage] = useState<string | null>(null);
+  const [isCapturing, setIsCapturing] = useState(false);
   const [chatMessages, setChatMessages] = useState([
     { role: "bot", text: "¡Hola! Soy el asistente virtual de SMART LENS IZCALLI. ¿En qué puedo ayudarte hoy?" }
   ]);
   const [userInput, setUserInput] = useState("");
-  const [reviews, setReviews] = useState([
-    { name: "María González", text: "Excelente atención y los lentes me quedaron perfectos. Muy recomendados.", stars: 5, date: "hace 2 días" },
-    { name: "Roberto Silva", text: "Gran variedad de armazones y el examen de la vista fue muy profesional.", stars: 5, date: "hace 1 semana" },
-    { name: "Ana Martínez", text: "El mejor servicio en Izcalli. Mis lentes llegaron antes de lo esperado.", stars: 5, date: "hace 2 semanas" },
-  ]);
-  const [newReview, setNewReview] = useState({ name: "", text: "", stars: 5 });
+  const [reviews, setReviews] = useState<any[]>([]);
+  const [newReview, setNewReview] = useState({ text: "", stars: 5 });
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
+  // Auth Listener
   useEffect(() => {
-    const handleScroll = () => {
-      setIsScrolled(window.scrollY > 50);
-    };
-    window.addEventListener("scroll", handleScroll);
-    return () => window.removeEventListener("scroll", handleScroll);
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser);
+      setIsAuthReady(true);
+      
+      if (firebaseUser) {
+        // Sync user profile to Firestore
+        const userRef = doc(db, 'users', firebaseUser.uid);
+        try {
+          const userDoc = await getDoc(userRef);
+          if (!userDoc.exists()) {
+            await setDoc(userRef, {
+              uid: firebaseUser.uid,
+              displayName: firebaseUser.displayName,
+              email: firebaseUser.email,
+              photoURL: firebaseUser.photoURL,
+              role: 'client',
+              createdAt: Timestamp.now()
+            });
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.WRITE, `users/${firebaseUser.uid}`);
+        }
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
-  const addToCart = (product: any) => {
-    const existing = cart.find(item => item.title === product.title);
-    if (existing) {
-      setCart(cart.map(item => item.title === product.title ? { ...item, quantity: item.quantity + 1 } : item));
-    } else {
-      setCart([...cart, { ...product, quantity: 1, price: product.title === "Lentes Graduados" ? 1200 : product.title === "Lentes de Sol" ? 850 : 600 }]);
+  // Sync Cart with Firestore
+  useEffect(() => {
+    if (!isAuthReady || !user) {
+      setCart([]);
+      return;
     }
+
+    const cartRef = doc(db, 'carts', user.uid);
+    const unsubscribe = onSnapshot(cartRef, (doc) => {
+      if (doc.exists()) {
+        setCart(doc.data().items || []);
+      } else {
+        setCart([]);
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `carts/${user.uid}`);
+    });
+
+    return () => unsubscribe();
+  }, [user, isAuthReady]);
+
+  // Sync Reviews with Firestore
+  useEffect(() => {
+    const reviewsRef = collection(db, 'reviews');
+    const q = query(reviewsRef, orderBy('createdAt', 'desc'), limit(10));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const reviewsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        date: doc.data().createdAt?.toDate().toLocaleDateString() || "Reciente"
+      }));
+      setReviews(reviewsData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'reviews');
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const updateCartInFirestore = async (newItems: any[]) => {
+    if (!user) return;
+    const cartRef = doc(db, 'carts', user.uid);
+    try {
+      await setDoc(cartRef, {
+        items: newItems,
+        updatedAt: Timestamp.now()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `carts/${user.uid}`);
+    }
+  };
+
+  const addToCart = async (product: any) => {
+    if (!user) {
+      alert("Por favor, inicia sesión para añadir productos al carrito.");
+      setIsProfileOpen(true);
+      return;
+    }
+    const existingItemIndex = cart.findIndex(item => 
+      item.id === product.id && item.color === product.color && item.tint === product.tint
+    );
+    
+    let newCart;
+    if (existingItemIndex > -1) {
+      newCart = [...cart];
+      newCart[existingItemIndex].quantity += 1;
+    } else {
+      newCart = [...cart, { ...product, quantity: 1 }];
+    }
+    
+    await updateCartInFirestore(newCart);
     setIsCartOpen(true);
   };
 
-  const removeFromCart = (title: string) => {
-    setCart(cart.filter(item => item.title !== title));
+  const removeFromCart = async (index: number) => {
+    const newCart = cart.filter((_, i) => i !== index);
+    await updateCartInFirestore(newCart);
   };
 
-  const updateQuantity = (title: string, delta: number) => {
-    setCart(cart.map(item => {
-      if (item.title === title) {
-        const newQty = Math.max(1, item.quantity + delta);
-        return { ...item, quantity: newQty };
+  const updateQuantity = async (index: number, delta: number) => {
+    const newCart = [...cart];
+    newCart[index].quantity = Math.max(1, newCart[index].quantity + delta);
+    await updateCartInFirestore(newCart);
+  };
+
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const frameStyles = [
+    { name: "Clásico", type: "classic" },
+    { name: "Aviador", type: "aviator" },
+    { name: "Cuadrado", type: "square" },
+    { name: "Redondo", type: "round" },
+    { name: "Cat Eye", type: "cateye" },
+    { name: "Deportivo", type: "sport" },
+  ];
+
+  const frameColors = [
+    { name: "Negro", value: "#0f172a" },
+    { name: "Oro", value: "#d4af37" },
+    { name: "Plata", value: "#94a3b8" },
+    { name: "Carey", value: "#78350f" },
+    { name: "Azul", value: "#1e3a8a" },
+    { name: "Rojo", value: "#991b1b" },
+  ];
+
+  const lensTints = [
+    { name: "Transparente", value: "transparent" },
+    { name: "Gris", value: "rgba(0,0,0,0.5)" },
+    { name: "Marrón", value: "rgba(120,53,15,0.5)" },
+    { name: "Verde", value: "rgba(21,128,61,0.5)" },
+    { name: "Azul", value: "rgba(30,58,138,0.5)" },
+    { name: "Degradado", value: "linear-gradient(to bottom, rgba(0,0,0,0.7), rgba(0,0,0,0.2))" },
+  ];
+
+  const startWebcam = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        setIsWebcamActive(true);
       }
-      return item;
-    }));
+    } catch (err) {
+      console.error("Error accessing webcam:", err);
+      alert("No se pudo acceder a la cámara. Por favor, asegúrate de dar los permisos necesarios.");
+    }
   };
 
-  const totalCart = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+  const stopWebcam = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+      tracks.forEach(track => track.stop());
+      setIsWebcamActive(false);
+    }
+  };
 
-  const sendQuoteWhatsApp = () => {
-    const message = `Hola SMART LENS IZCALLI, me gustaría una cotización por:\n${cart.map(item => `- ${item.title} (${item.quantity}x): $${item.price * item.quantity}`).join("\n")}\nTotal: $${totalCart}\n¿Tienen disponibilidad?`;
-    window.open(`https://wa.me/525518486327?text=${encodeURIComponent(message)}`, "_blank");
+  const capturePhoto = () => {
+    setIsCapturing(true);
+    if (videoRef.current && canvasRef.current) {
+      const context = canvasRef.current.getContext("2d");
+      if (context) {
+        canvasRef.current.width = videoRef.current.videoWidth;
+        canvasRef.current.height = videoRef.current.videoHeight;
+        context.drawImage(videoRef.current, 0, 0);
+        setTryOnImage(canvasRef.current.toDataURL("image/png"));
+        stopWebcam();
+      }
+    }
+    setTimeout(() => setIsCapturing(false), 500);
+  };
+
+  const downloadTryOn = () => {
+    if (!tryOnImage) return;
+    const link = document.createElement("a");
+    link.download = "mi-estilo-smartlens.png";
+    link.href = tryOnImage;
+    link.click();
+  };
+
+  const resetTryOn = () => {
+    setFrameScale(1);
+    setFrameRotation(0);
+    setFrameColor("#0f172a");
+    setLensTint("transparent");
   };
 
   const handleTryOnUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => setTryOnImage(event.target?.result as string);
+      reader.onload = (event) => {
+        setTryOnImage(event.target?.result as string);
+      };
       reader.readAsDataURL(file);
     }
   };
 
-  const handleSendMessage = () => {
+
+  const openTryOn = (frameIndex = 0, tint = "transparent") => {
+    setSelectedFrame(frameIndex);
+    setLensTint(tint);
+    setIsTryOnOpen(true);
+  };
+
+  const cartTotal = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+
+  const sendQuoteWhatsApp = () => {
+    const message = `Hola SMART LENS IZCALLI, me gustaría una cotización por:\n${cart.map(item => `- ${item.title} (${item.quantity}x): $${item.price * item.quantity}`).join("\n")}\nTotal: $${cartTotal}\n¿Tienen disponibilidad?`;
+    window.open(`https://wa.me/525518486327?text=${encodeURIComponent(message)}`, "_blank");
+  };
+
+  const sendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
     if (!userInput.trim()) return;
+    
     const newMessages = [...chatMessages, { role: "user", text: userInput }];
     setChatMessages(newMessages);
     setUserInput("");
@@ -132,12 +387,38 @@ export default function App() {
     }, 1000);
   };
 
-  const submitReview = (e: React.FormEvent) => {
+  const submitReview = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newReview.name || !newReview.text) return;
-    setReviews([{ ...newReview, date: "Recién publicado" }, ...reviews]);
-    setNewReview({ name: "", text: "", stars: 5 });
+    if (!user) {
+      alert("Por favor, inicia sesión para dejar una reseña.");
+      setIsProfileOpen(true);
+      return;
+    }
+    if (!newReview.text) return;
+
+    try {
+      await addDoc(collection(db, "reviews"), {
+        uid: user.uid,
+        name: user.displayName || "Usuario",
+        text: newReview.text,
+        stars: newReview.stars,
+        date: new Date().toISOString(),
+        createdAt: serverTimestamp()
+      });
+      setNewReview({ name: "", text: "", stars: 5 });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, "reviews");
+    }
   };
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 50);
+    };
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
   const services = [
     {
       title: "Lentes Graduados",
@@ -307,7 +588,7 @@ export default function App() {
                 <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </button>
               <button 
-                onClick={() => setIsTryOnOpen(true)}
+                onClick={() => openTryOn(0)}
                 className="bg-white/10 hover:bg-white/20 backdrop-blur-md text-white border border-white/30 px-8 py-4 rounded-full font-bold text-lg transition-all flex items-center justify-center gap-2"
               >
                 <Camera className="w-5 h-5" />
@@ -622,14 +903,25 @@ export default function App() {
                   </p>
                     <div className="flex flex-col gap-3">
                       <button 
-                        onClick={() => addToCart(product)}
+                        onClick={() => addToCart({
+                          id: `product-${i}`,
+                          title: product.title,
+                          price: 1899,
+                          image: product.images[0],
+                          color: "Negro",
+                          tint: "Transparente"
+                        })}
                         className="w-full bg-slate-900 text-white font-bold py-3.5 rounded-xl hover:bg-blue-900 transition-all flex items-center justify-center gap-2 group/btn"
                       >
                         <ShoppingBag className="w-4 h-4 group-hover/btn:scale-110 transition-transform" />
                         Configurar & Comprar
                       </button>
                       <button 
-                        onClick={() => setIsTryOnOpen(true)}
+                        onClick={() => {
+                          const index = product.title === "Lentes de Sol" ? 1 : product.title === "Armazones Modernos" ? 2 : 0;
+                          const tint = product.title === "Lentes de Sol" ? "rgba(0,0,0,0.5)" : "transparent";
+                          openTryOn(index, tint);
+                        }}
                         className="w-full bg-slate-50 text-slate-600 font-bold py-3.5 rounded-xl hover:bg-slate-100 transition-all flex items-center justify-center gap-2"
                       >
                         <Camera className="w-4 h-4" />
@@ -697,14 +989,23 @@ export default function App() {
               <p className="text-blue-100 text-lg mb-8 max-w-2xl mx-auto">
                 Aprovecha esta oferta única y renueva tu mirada con el mejor estilo y protección.
               </p>
-              <a 
-                href="https://wa.me/5215518486327?text=Quiero%20más%20info%20de%20la%20promoción%202x1" 
-                target="_blank"
-                className="inline-flex items-center gap-2 bg-white text-blue-900 hover:bg-blue-50 px-8 py-4 rounded-full font-bold transition-all shadow-xl"
-              >
-                <MessageCircle className="w-5 h-5 text-green-500" />
-                ¡Pregunta ahora por WhatsApp!
-              </a>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                <a 
+                  href="https://wa.me/5215518486327?text=Quiero%20más%20info%20de%20la%20promoción%202x1" 
+                  target="_blank"
+                  className="inline-flex items-center gap-2 bg-white text-blue-900 hover:bg-blue-50 px-8 py-4 rounded-full font-bold transition-all shadow-xl"
+                >
+                  <MessageCircle className="w-5 h-5 text-green-500" />
+                  ¡Pregunta ahora por WhatsApp!
+                </a>
+                <button 
+                  onClick={() => openTryOn(0)}
+                  className="inline-flex items-center gap-2 bg-blue-800/50 text-white hover:bg-blue-800 px-8 py-4 rounded-full font-bold transition-all border border-white/20 backdrop-blur-sm"
+                >
+                  <Camera className="w-5 h-5" />
+                  Probar en mi rostro
+                </button>
+              </div>
             </div>
           </motion.div>
         </div>
@@ -766,17 +1067,17 @@ export default function App() {
 
           <div className="grid md:grid-cols-3 gap-8 mb-16">
             {reviews.map((t, i) => (
-              <div key={i} className="bg-white p-8 rounded-3xl shadow-sm border border-blue-100 relative">
+              <div key={t.id || i} className="bg-white p-8 rounded-3xl shadow-sm border border-blue-100 relative">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex gap-1">
                     {[...Array(5)].map((_, idx) => (
-                      <Star key={idx} className={`w-4 h-4 ${idx < t.stars ? "text-amber-500 fill-amber-500" : "text-slate-200"}`} />
+                      <Star key={idx} className={`w-4 h-4 ${idx < t.rating ? "text-amber-500 fill-amber-500" : "text-slate-200"}`} />
                     ))}
                   </div>
                   <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{t.date}</span>
                 </div>
-                <p className="text-slate-600 italic mb-6 leading-relaxed">"{t.text}"</p>
-                <div className="font-bold text-slate-900">— {t.name}</div>
+                <p className="text-slate-600 italic mb-6 leading-relaxed">"{t.comment}"</p>
+                <div className="font-bold text-slate-900">— {t.userName}</div>
               </div>
             ))}
           </div>
@@ -784,16 +1085,9 @@ export default function App() {
           {/* Review Form */}
           <div className="max-w-2xl mx-auto bg-white p-10 rounded-[2.5rem] shadow-xl border border-blue-100">
             <h4 className="text-2xl font-bold text-slate-900 mb-6 text-center">Deja tu opinión</h4>
-            <form onSubmit={submitReview} className="space-y-4">
+            <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <input 
-                  type="text" 
-                  placeholder="Tu nombre" 
-                  value={newReview.name}
-                  onChange={(e) => setNewReview({...newReview, name: e.target.value})}
-                  className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-blue-500 transition-all"
-                />
-                <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 w-full sm:col-span-2">
                   <span className="text-sm font-bold text-slate-500">Calificación:</span>
                   <div className="flex gap-1">
                     {[1, 2, 3, 4, 5].map((star) => (
@@ -810,16 +1104,21 @@ export default function App() {
                 </div>
               </div>
               <textarea 
-                placeholder="Cuéntanos tu experiencia..." 
+                placeholder={user ? "Cuéntanos tu experiencia..." : "Inicia sesión para dejar una reseña"} 
                 rows={3}
+                disabled={!user}
                 value={newReview.text}
                 onChange={(e) => setNewReview({...newReview, text: e.target.value})}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-blue-500 transition-all resize-none"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-blue-500 transition-all resize-none disabled:opacity-50"
               />
-              <button className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20">
-                Publicar Reseña
+              <button 
+                onClick={submitReview}
+                disabled={!user || !newReview.text.trim()}
+                className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:shadow-none"
+              >
+                Enviar Reseña
               </button>
-            </form>
+            </div>
           </div>
         </div>
       </section>
@@ -1018,11 +1317,11 @@ export default function App() {
               placeholder="Escribe tu duda..." 
               value={userInput}
               onChange={(e) => setUserInput(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
+              onKeyPress={(e) => e.key === "Enter" && sendMessage(e as any)}
               className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:border-blue-500"
             />
             <button 
-              onClick={handleSendMessage}
+              onClick={(e) => sendMessage(e as any)}
               className="bg-blue-600 text-white p-2 rounded-xl hover:bg-blue-700 transition-colors"
             >
               <Send className="w-5 h-5" />
@@ -1057,25 +1356,30 @@ export default function App() {
                   <p className="font-medium">Tu carrito está vacío</p>
                 </div>
               ) : (
-                cart.map((item, i) => (
-                  <div key={i} className="flex gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <img src={item.images[0]} className="w-20 h-20 object-cover rounded-xl" />
+                cart.map((item, index) => (
+                  <div key={index} className="flex gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                    <div className="w-20 h-20 bg-white rounded-xl overflow-hidden border border-slate-100 p-2">
+                      <img src={item.image} alt={item.title} className="w-full h-full object-contain" />
+                    </div>
                     <div className="flex-1">
-                      <div className="flex justify-between items-start mb-2">
-                        <h4 className="font-bold text-slate-900">{item.title}</h4>
-                        <button onClick={() => removeFromCart(item.title)} className="text-slate-400 hover:text-red-500">
+                      <div className="flex justify-between items-start mb-1">
+                        <h4 className="font-bold text-slate-900 leading-tight">{item.title}</h4>
+                        <button onClick={() => removeFromCart(index)} className="text-slate-300 hover:text-red-500 transition-colors">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
-                      <p className="text-blue-600 font-bold text-sm mb-3">${item.price * item.quantity}</p>
-                      <div className="flex items-center gap-3">
-                        <button onClick={() => updateQuantity(item.title, -1)} className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center hover:border-blue-500">
-                          <Minus className="w-3 h-3" />
-                        </button>
-                        <span className="font-bold text-slate-700">{item.quantity}</span>
-                        <button onClick={() => updateQuantity(item.title, 1)} className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center hover:border-blue-500">
-                          <Plus className="w-3 h-3" />
-                        </button>
+                      <p className="text-xs text-slate-500 mb-2">Color: {item.color} | Mica: {item.tint}</p>
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-3">
+                          <button onClick={() => updateQuantity(index, -1)} className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center hover:border-blue-500">
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="font-bold text-slate-700">{item.quantity}</span>
+                          <button onClick={() => updateQuantity(index, 1)} className="w-8 h-8 bg-white border border-slate-200 rounded-lg flex items-center justify-center hover:border-blue-500">
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <p className="text-blue-600 font-bold">${item.price * item.quantity}</p>
                       </div>
                     </div>
                   </div>
@@ -1087,7 +1391,7 @@ export default function App() {
               <div className="p-8 bg-slate-50 border-t border-slate-100 space-y-4">
                 <div className="flex justify-between items-center text-lg font-bold text-slate-900">
                   <span>Total Estimado:</span>
-                  <span className="text-blue-600">${totalCart}</span>
+                  <span className="text-blue-600">${cartTotal}</span>
                 </div>
                 <button 
                   onClick={sendQuoteWhatsApp}
@@ -1108,31 +1412,250 @@ export default function App() {
           <motion.div 
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white w-full max-w-4xl rounded-[3rem] overflow-hidden shadow-2xl relative flex flex-col md:flex-row"
+            className="bg-white w-full max-w-5xl rounded-[3rem] overflow-hidden shadow-2xl relative flex flex-col md:flex-row h-[90vh] md:h-auto"
           >
-            <button onClick={() => setIsTryOnOpen(false)} className="absolute top-6 right-6 p-2 bg-white/80 backdrop-blur-sm hover:bg-white rounded-full z-10 shadow-lg">
+            <button 
+              onClick={() => {
+                stopWebcam();
+                setIsTryOnOpen(false);
+              }} 
+              className="absolute top-6 right-6 p-2 bg-white/80 backdrop-blur-sm hover:bg-white rounded-full z-20 shadow-lg"
+            >
               <X className="w-6 h-6 text-slate-500" />
             </button>
 
-            <div className="flex-1 bg-slate-100 relative min-h-[400px] flex items-center justify-center overflow-hidden">
-              {tryOnImage ? (
-                <div className="relative w-full h-full flex items-center justify-center">
+            <div className="flex-1 bg-slate-900 relative min-h-[400px] flex items-center justify-center overflow-hidden">
+              {isWebcamActive ? (
+                <div className={`relative w-full h-full flex flex-col items-center justify-center ${isMirrored ? 'scale-x-[-1]' : ''}`}>
+                  <video 
+                    ref={videoRef} 
+                    autoPlay 
+                    playsInline 
+                    className="w-full h-full object-cover"
+                  />
+                  
+                  {/* Face Guide Overlay */}
+                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                    <div className="w-64 h-80 border-2 border-white/20 rounded-[100px] relative overflow-hidden">
+                      <div className="absolute top-1/2 left-0 w-full h-px bg-white/10" />
+                      <div className="absolute top-1/3 left-0 w-full h-px bg-white/10" />
+                      
+                      {/* Scan Line Animation */}
+                      <motion.div 
+                        animate={{ top: ["0%", "100%", "0%"] }}
+                        transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                        className="absolute left-0 w-full h-1 bg-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.5)] z-10"
+                      />
+
+                      <p className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/40 text-[10px] font-bold uppercase tracking-widest whitespace-nowrap">
+                        Alinea tus ojos aquí
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="absolute bottom-8 flex gap-4">
+                    <button 
+                      onClick={capturePhoto}
+                      className="bg-white text-blue-900 font-bold px-8 py-4 rounded-full shadow-xl hover:bg-blue-50 transition-all flex items-center gap-2"
+                    >
+                      <Camera className="w-5 h-5" />
+                      Capturar Foto
+                    </button>
+                    <button 
+                      onClick={stopWebcam}
+                      className="bg-slate-800/80 text-white font-bold px-6 py-4 rounded-full backdrop-blur-md hover:bg-slate-700 transition-all"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : tryOnImage ? (
+                <div className={`relative w-full h-full flex items-center justify-center bg-slate-800 ${isMirrored ? 'scale-x-[-1]' : ''}`}>
                   <img src={tryOnImage} className="max-w-full max-h-full object-contain" />
+                  
+                  {/* The Glasses Overlay */}
                   <motion.div 
                     drag
-                    dragConstraints={{ left: -100, right: 100, top: -100, bottom: 100 }}
-                    className="absolute cursor-move"
+                    dragMomentum={false}
+                    style={{ 
+                      scale: frameScale,
+                      rotate: frameRotation,
+                    }}
+                    className="absolute cursor-move z-10"
                   >
-                    <Glasses className="w-32 h-32 text-slate-900/80 drop-shadow-2xl" />
+                    <div className="relative group">
+                      <div style={{ color: frameColor }} className="transition-colors duration-300">
+                        {frameStyles[selectedFrame].type === "classic" && (
+                          <div className="w-48 h-16 flex items-center justify-between px-2 drop-shadow-2xl relative">
+                            <div className="w-20 h-14 border-[6px] border-current rounded-tr-[10px] rounded-tl-[10px] rounded-br-[30px] rounded-bl-[30px] relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-2 left-2 w-10 h-2 bg-white/20 rounded-full blur-sm rotate-[-15deg]" />
+                            </div>
+                            <div className="w-8 h-1.5 bg-current -mt-4" />
+                            <div className="w-20 h-14 border-[6px] border-current rounded-tl-[10px] rounded-tr-[10px] rounded-bl-[30px] rounded-br-[30px] relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-2 left-2 w-10 h-2 bg-white/20 rounded-full blur-sm rotate-[-15deg]" />
+                            </div>
+                          </div>
+                        )}
+                        {frameStyles[selectedFrame].type === "aviator" && (
+                          <div className="w-48 h-20 flex items-center justify-between px-2 drop-shadow-2xl relative">
+                            <div className="w-20 h-16 border-[6px] border-current rounded-t-lg rounded-b-[40px] relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-2 left-2 w-10 h-4 bg-white/20 rounded-full blur-sm rotate-[-10deg]" />
+                            </div>
+                            <div className="w-8 h-1.5 bg-current -mt-4" />
+                            <div className="w-20 h-16 border-[6px] border-current rounded-t-lg rounded-b-[40px] relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-2 left-2 w-10 h-4 bg-white/20 rounded-full blur-sm rotate-[-10deg]" />
+                            </div>
+                          </div>
+                        )}
+                        {frameStyles[selectedFrame].type === "square" && (
+                          <div className="w-48 h-16 flex items-center justify-between px-2 drop-shadow-2xl">
+                            <div className="w-18 h-14 border-[6px] border-current rounded-md relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-2 left-2 w-8 h-2 bg-white/10 rounded-full blur-sm rotate-[-10deg]" />
+                            </div>
+                            <div className="w-12 h-1.5 bg-current" />
+                            <div className="w-18 h-14 border-[6px] border-current rounded-md relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-2 left-2 w-8 h-2 bg-white/10 rounded-full blur-sm rotate-[-10deg]" />
+                            </div>
+                          </div>
+                        )}
+                        {frameStyles[selectedFrame].type === "round" && (
+                          <div className="w-48 h-20 flex items-center justify-between px-2 drop-shadow-2xl">
+                            <div className="w-18 h-18 border-[6px] border-current rounded-full relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-3 left-3 w-8 h-3 bg-white/10 rounded-full blur-sm rotate-[-20deg]" />
+                            </div>
+                            <div className="w-12 h-1.5 bg-current" />
+                            <div className="w-18 h-18 border-[6px] border-current rounded-full relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-3 left-3 w-8 h-3 bg-white/10 rounded-full blur-sm rotate-[-20deg]" />
+                            </div>
+                          </div>
+                        )}
+                        {frameStyles[selectedFrame].type === "cateye" && (
+                          <div className="w-48 h-16 flex items-center justify-between px-2 drop-shadow-2xl">
+                            <div className="w-20 h-14 border-[6px] border-current rounded-tr-[40px] rounded-bl-[20px] rounded-br-[10px] rounded-tl-[10px] relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-2 left-4 w-8 h-2 bg-white/10 rounded-full blur-sm rotate-[-15deg]" />
+                            </div>
+                            <div className="w-8 h-1.5 bg-current" />
+                            <div className="w-20 h-14 border-[6px] border-current rounded-tl-[40px] rounded-br-[20px] rounded-bl-[10px] rounded-tr-[10px] relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-2 right-4 w-8 h-2 bg-white/10 rounded-full blur-sm rotate-[15deg]" />
+                            </div>
+                          </div>
+                        )}
+                        {frameStyles[selectedFrame].type === "sport" && (
+                          <div className="w-52 h-14 flex items-center justify-between px-1 drop-shadow-2xl">
+                            <div className="w-24 h-12 border-[6px] border-current rounded-t-sm rounded-br-[30px] rounded-bl-[10px] relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-1 left-2 w-12 h-2 bg-white/20 rounded-full blur-sm rotate-[-10deg]" />
+                            </div>
+                            <div className="w-4 h-1 bg-current" />
+                            <div className="w-24 h-12 border-[6px] border-current rounded-t-sm rounded-bl-[30px] rounded-br-[10px] relative overflow-hidden">
+                              <div className="absolute inset-0" style={{ background: lensTint }} />
+                              <div className="absolute top-1 right-2 w-12 h-2 bg-white/20 rounded-full blur-sm rotate-[10deg]" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* Visual Guide */}
+                      <div className="absolute -inset-4 border-2 border-dashed border-blue-400/0 group-hover:border-blue-400/50 rounded-xl transition-all" />
+                    </div>
                   </motion.div>
+
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col gap-4 bg-slate-900/80 backdrop-blur-md p-4 rounded-3xl border border-white/10 z-20 w-[90%] max-w-sm">
+                    <div className="flex items-center gap-4">
+                      <span className="text-[10px] font-bold text-white uppercase tracking-widest w-12">Tamaño</span>
+                      <input 
+                        type="range" 
+                        min="0.5" 
+                        max="2" 
+                        step="0.01" 
+                        value={frameScale} 
+                        onChange={(e) => setFrameScale(parseFloat(e.target.value))}
+                        className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      />
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <span className="text-[10px] font-bold text-white uppercase tracking-widest w-12">Rotación</span>
+                      <input 
+                        type="range" 
+                        min="-180" 
+                        max="180" 
+                        step="1" 
+                        value={frameRotation} 
+                        onChange={(e) => setFrameRotation(parseInt(e.target.value))}
+                        className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      />
+                    </div>
+                    <div className="flex justify-between items-center pt-2 border-t border-white/10">
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => setIsMirrored(!isMirrored)}
+                          className={`p-2 rounded-lg transition-colors ${isMirrored ? 'bg-blue-600 text-white' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                          title="Efecto Espejo"
+                        >
+                          <FlipHorizontal className="w-5 h-5" />
+                        </button>
+                        <button 
+                          onClick={resetTryOn}
+                          className="p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
+                          title="Restablecer"
+                        >
+                          <RefreshCw className="w-5 h-5" />
+                        </button>
+                      </div>
+                      <button 
+                        onClick={downloadTryOn}
+                        className="flex items-center gap-2 bg-white text-slate-900 px-4 py-2 rounded-xl font-bold text-sm hover:bg-blue-50 transition-all"
+                      >
+                        <Download className="w-4 h-4" />
+                        Guardar
+                      </button>
+                    </div>
+                    <button 
+                      onClick={() => setTryOnImage(null)}
+                      className="p-2 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors"
+                      title="Nueva foto"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="text-center p-12">
-                  <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6 text-blue-600">
-                    <Camera className="w-10 h-10" />
+                  <div className="w-24 h-24 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-8 text-blue-400 border border-blue-500/30">
+                    <Camera className="w-12 h-12" />
                   </div>
-                  <h3 className="text-2xl font-bold text-slate-900 mb-2">Probador Virtual AR</h3>
-                  <p className="text-slate-500 mb-8">Sube una foto de tu rostro para ver cómo te quedan nuestros modelos.</p>
+                  <h3 className="text-3xl font-bold text-white mb-4">Probador Virtual Pro</h3>
+                  <p className="text-slate-400 mb-10 max-w-md mx-auto text-lg">
+                    Descubre cómo te quedan nuestros armazones usando tu cámara en tiempo real o subiendo una foto.
+                  </p>
+                  
+                  <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                    <button 
+                      onClick={startWebcam}
+                      className="bg-blue-600 text-white font-bold px-10 py-5 rounded-2xl hover:bg-blue-700 transition-all flex items-center justify-center gap-3 shadow-lg shadow-blue-900/20"
+                    >
+                      <Camera className="w-6 h-6" />
+                      Usar Cámara
+                    </button>
+                    <button 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="bg-slate-800 text-white font-bold px-10 py-5 rounded-2xl hover:bg-slate-700 transition-all flex items-center justify-center gap-3 border border-white/5"
+                    >
+                      <Upload className="w-6 h-6" />
+                      Subir Foto
+                    </button>
+                  </div>
+                  
                   <input 
                     type="file" 
                     ref={fileInputRef} 
@@ -1140,30 +1663,117 @@ export default function App() {
                     className="hidden" 
                     accept="image/*"
                   />
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="bg-blue-600 text-white font-bold px-8 py-4 rounded-xl hover:bg-blue-700 transition-all"
-                  >
-                    Subir mi Foto
-                  </button>
+                  
+                  <canvas ref={canvasRef} className="hidden" />
                 </div>
               )}
             </div>
 
-            <div className="w-full md:w-80 p-8 border-l border-slate-100 bg-white">
-              <h4 className="font-bold text-slate-900 mb-6 uppercase tracking-widest text-xs">Selecciona un Modelo</h4>
-              <div className="grid grid-cols-2 gap-4">
-                {[1, 2, 3, 4].map(i => (
-                  <button key={i} className="aspect-square bg-slate-50 rounded-2xl border-2 border-transparent hover:border-blue-500 transition-all flex items-center justify-center p-4">
-                    <Glasses className="w-full h-full text-slate-400" />
-                  </button>
-                ))}
+            <div className="w-full md:w-96 p-10 border-l border-slate-100 bg-white overflow-y-auto max-h-[40vh] md:max-h-none">
+              <div className="mb-10">
+                <h4 className="font-bold text-slate-900 mb-2 uppercase tracking-widest text-xs">Paso 1</h4>
+                <p className="text-slate-500 text-sm">Sube tu foto o activa la cámara.</p>
               </div>
-              <div className="mt-8 p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                <p className="text-xs text-blue-700 font-medium leading-relaxed">
-                  <AlertCircle className="w-4 h-4 inline mr-1 mb-1" />
-                  Tip: Puedes arrastrar los lentes sobre tu foto para ajustarlos.
-                </p>
+
+              <div className="mb-10">
+                <h4 className="font-bold text-slate-900 mb-6 uppercase tracking-widest text-xs">Paso 2: Selecciona un Estilo</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  {frameStyles.map((style, i) => (
+                    <button 
+                      key={i} 
+                      onClick={() => setSelectedFrame(i)}
+                      className={`aspect-square rounded-3xl border-2 transition-all flex flex-col items-center justify-center p-4 gap-3 ${
+                        selectedFrame === i 
+                          ? "border-blue-600 bg-blue-50 text-blue-600 shadow-md" 
+                          : "border-slate-100 bg-slate-50 text-slate-400 hover:border-blue-200"
+                      }`}
+                    >
+                      <div className="w-full h-12 flex items-center justify-center">
+                        <Glasses className={`w-full h-full ${selectedFrame === i ? "text-blue-600" : "text-slate-400"}`} />
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-tighter">{style.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mb-10">
+                <h4 className="font-bold text-slate-900 mb-6 uppercase tracking-widest text-xs">Paso 3: Elige un Color</h4>
+                <div className="flex flex-wrap gap-3">
+                  {frameColors.map((color, i) => (
+                    <button 
+                      key={i}
+                      onClick={() => setFrameColor(color.value)}
+                      className={`w-10 h-10 rounded-full border-2 transition-all flex items-center justify-center ${
+                        frameColor === color.value ? "border-blue-600 scale-110 shadow-lg" : "border-transparent"
+                      }`}
+                      style={{ backgroundColor: color.value }}
+                      title={color.name}
+                    >
+                      {frameColor === color.value && <div className="w-2 h-2 bg-white rounded-full" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mb-10">
+                <h4 className="font-bold text-slate-900 mb-6 uppercase tracking-widest text-xs">Paso 4: Tinte de Micas</h4>
+                <div className="flex flex-wrap gap-3">
+                  {lensTints.map((tint, i) => (
+                    <button 
+                      key={i}
+                      onClick={() => setLensTint(tint.value)}
+                      className={`w-10 h-10 rounded-full border-2 transition-all flex items-center justify-center overflow-hidden ${
+                        lensTint === tint.value ? "border-blue-600 scale-110 shadow-lg" : "border-slate-100"
+                      }`}
+                      style={{ background: tint.value }}
+                      title={tint.name}
+                    >
+                      {lensTint === tint.value && <div className="w-2 h-2 bg-white rounded-full shadow-sm" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mb-10">
+                <button 
+                  onClick={() => {
+                    addToCart({
+                      id: `frame-${frameStyles[selectedFrame].type}`,
+                      title: `Armazón ${frameStyles[selectedFrame].name}`,
+                      price: 1899,
+                      image: "https://images.unsplash.com/photo-1572635196237-14b3f281503f?q=80&w=2080&auto=format&fit=crop",
+                      color: frameColor,
+                      tint: lensTint
+                    });
+                    setIsTryOnOpen(false);
+                  }}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
+                >
+                  <ShoppingCart className="w-5 h-5" />
+                  Añadir al Carrito
+                </button>
+              </div>
+
+              <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-100">
+                <h5 className="font-bold text-slate-900 text-sm mb-3 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-blue-600" />
+                  Instrucciones
+                </h5>
+                <ul className="text-xs text-slate-500 space-y-3 leading-relaxed">
+                  <li className="flex gap-2">
+                    <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0 font-bold">1</span>
+                    Arrastra los lentes sobre tus ojos.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0 font-bold">2</span>
+                    Usa los controles inferiores para ajustar el tamaño y la inclinación.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0 font-bold">3</span>
+                    ¡Captura pantalla o guarda tu foto favorita!
+                  </li>
+                </ul>
               </div>
             </div>
           </motion.div>
@@ -1184,19 +1794,48 @@ export default function App() {
             
             <div className="flex flex-col md:flex-row">
               <div className="w-full md:w-64 bg-slate-50 p-8 border-r border-slate-100">
-                <div className="w-24 h-24 bg-blue-600 rounded-3xl mx-auto mb-6 flex items-center justify-center text-white text-3xl font-bold">
-                  JS
-                </div>
-                <h4 className="text-xl font-bold text-slate-900 text-center mb-1">Juan Sánchez</h4>
-                <p className="text-slate-500 text-xs text-center mb-8">Cliente desde 2024</p>
-                
-                <nav className="space-y-2">
-                  {["Mi Perfil", "Mis Recetas", "Historial", "Ajustes"].map(item => (
-                    <button key={item} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${item === "Mi Perfil" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
-                      {item}
+                {user ? (
+                  <>
+                    <div className="w-24 h-24 bg-blue-600 rounded-3xl mx-auto mb-6 flex items-center justify-center text-white text-3xl font-bold overflow-hidden">
+                      {user.photoURL ? (
+                        <img src={user.photoURL} alt={user.displayName || ""} className="w-full h-full object-cover" />
+                      ) : (
+                        user.displayName?.charAt(0) || "U"
+                      )}
+                    </div>
+                    <h4 className="text-xl font-bold text-slate-900 text-center mb-1">{user.displayName}</h4>
+                    <p className="text-slate-500 text-xs text-center mb-8">{user.email}</p>
+                    
+                    <nav className="space-y-2">
+                      {["Mi Perfil", "Mis Recetas", "Historial", "Ajustes"].map(item => (
+                        <button key={item} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${item === "Mi Perfil" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
+                          {item}
+                        </button>
+                      ))}
+                      <button 
+                        onClick={() => { logout(); setIsProfileOpen(false); }}
+                        className="w-full text-left px-4 py-3 rounded-xl text-sm font-bold text-red-600 hover:bg-red-50 transition-all"
+                      >
+                        Cerrar Sesión
+                      </button>
+                    </nav>
+                  </>
+                ) : (
+                  <div className="text-center py-10">
+                    <div className="w-20 h-20 bg-slate-200 rounded-full mx-auto mb-6 flex items-center justify-center text-slate-400">
+                      <User className="w-10 h-10" />
+                    </div>
+                    <h4 className="text-xl font-bold text-slate-900 mb-2">Bienvenido</h4>
+                    <p className="text-slate-500 text-sm mb-8">Inicia sesión para gestionar tus pedidos y recetas.</p>
+                    <button 
+                      onClick={loginWithGoogle}
+                      className="w-full bg-white border border-slate-200 text-slate-700 font-bold py-3 rounded-xl hover:bg-slate-50 transition-all flex items-center justify-center gap-2 shadow-sm"
+                    >
+                      <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
+                      Google Login
                     </button>
-                  ))}
-                </nav>
+                  </div>
+                )}
               </div>
               
               <div className="flex-1 p-10">

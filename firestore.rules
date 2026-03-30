@@ -1,0 +1,172 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (uid)
+    // Fields:
+    //   - uid: string (required)
+    //   - displayName: string (optional)
+    //   - email: string (required, format: email)
+    //   - photoURL: string (optional, format: uri)
+    //   - role: string (required, enum: ['admin', 'client'])
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: products
+    // Document ID: productId
+    // Fields:
+    //   - id: string (required)
+    //   - title: string (required, size < 100)
+    //   - price: number (required, positive)
+    //   - description: string (optional, size < 1000)
+    //   - image: string (required, format: uri)
+    //   - category: string (required)
+    //   - stock: int (optional, positive)
+    //
+    // Collection: reviews
+    // Document ID: reviewId
+    // Fields:
+    //   - id: string (required)
+    //   - userId: string (required)
+    //   - userName: string (required, size < 50)
+    //   - rating: int (required, range: 1-5)
+    //   - comment: string (required, size < 500)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: carts
+    // Document ID: userId
+    // Fields:
+    //   - items: list (required, size < 50)
+    //   - updatedAt: timestamp (required)
+    //
+    // Collection: tryOnPhotos
+    // Document ID: photoId
+    // Fields:
+    //   - id: string (required)
+    //   - userId: string (required)
+    //   - photoUrl: string (required, format: uri)
+    //   - frameId: string (optional)
+    //   - createdAt: timestamp (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "angelantonioflore837@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'email', 'role', 'createdAt']) &&
+             hasOnlyAllowedFields(['uid', 'displayName', 'email', 'photoURL', 'role', 'createdAt']) &&
+             data.uid == request.auth.uid &&
+             data.email == request.auth.token.email &&
+             data.role in ['admin', 'client'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return hasRequiredFields(['id', 'title', 'price', 'image', 'category']) &&
+             hasOnlyAllowedFields(['id', 'title', 'price', 'description', 'image', 'category', 'stock']) &&
+             data.title is string && data.title.size() < 100 &&
+             data.price is number && data.price > 0 &&
+             isValidUrl(data.image) &&
+             data.category is string;
+    }
+
+    function isValidReview(data) {
+      return hasRequiredFields(['userId', 'userName', 'rating', 'comment', 'createdAt']) &&
+             hasOnlyAllowedFields(['id', 'userId', 'userName', 'rating', 'comment', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.userName is string && data.userName.size() < 50 &&
+             data.rating is int && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() < 500 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidCart(data) {
+      return hasRequiredFields(['items', 'updatedAt']) &&
+             hasOnlyAllowedFields(['items', 'updatedAt']) &&
+             data.items is list && data.items.size() < 50 &&
+             data.updatedAt is timestamp;
+    }
+
+    function isValidTryOnPhoto(data) {
+      return hasRequiredFields(['userId', 'photoUrl', 'createdAt']) &&
+             hasOnlyAllowedFields(['id', 'userId', 'photoUrl', 'frameId', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             isValidUrl(data.photoUrl) &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == 'client' || isAdmin());
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidProduct(request.resource.data);
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidReview(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidReview(request.resource.data);
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /carts/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isOwner(userId) && isValidCart(request.resource.data);
+    }
+
+    match /tryOnPhotos/{photoId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidTryOnPhoto(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidTryOnPhoto(request.resource.data);
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+  }
+}

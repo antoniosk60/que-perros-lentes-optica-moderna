@@ -1,0 +1,106 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique user ID" },
+        "displayName": { "type": "string", "description": "User's display name" },
+        "email": { "type": "string", "format": "email", "description": "User's email address" },
+        "photoURL": { "type": "string", "format": "uri", "description": "User's profile photo URL" },
+        "role": { "type": "string", "enum": ["admin", "client"], "description": "User's role" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account creation timestamp" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Eyeglass frame or lens product",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique product ID" },
+        "title": { "type": "string", "description": "Product name" },
+        "price": { "type": "number", "description": "Product price" },
+        "description": { "type": "string", "description": "Product description" },
+        "image": { "type": "string", "format": "uri", "description": "Product image URL" },
+        "category": { "type": "string", "description": "Product category (e.g., Lentes de Sol, Oftálmicos)" },
+        "stock": { "type": "integer", "description": "Available stock" }
+      },
+      "required": ["id", "title", "price", "image"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Customer review for the store or products",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique review ID" },
+        "userId": { "type": "string", "description": "ID of the user who wrote the review" },
+        "userName": { "type": "string", "description": "Name of the user who wrote the review" },
+        "rating": { "type": "integer", "description": "Rating from 1 to 5" },
+        "comment": { "type": "string", "description": "Review text" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp of the review" }
+      },
+      "required": ["userId", "rating", "comment", "createdAt"]
+    },
+    "CartItem": {
+      "title": "Cart Item",
+      "description": "An item in the user's shopping cart",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique item ID" },
+        "title": { "type": "string", "description": "Product title" },
+        "price": { "type": "number", "description": "Product price" },
+        "quantity": { "type": "integer", "description": "Quantity of the item" },
+        "image": { "type": "string", "format": "uri", "description": "Product image URL" },
+        "color": { "type": "string", "description": "Selected frame color" },
+        "tint": { "type": "string", "description": "Selected lens tint" }
+      },
+      "required": ["id", "title", "price", "quantity"]
+    },
+    "TryOnPhoto": {
+      "title": "Try-On Photo",
+      "description": "A saved virtual try-on photo",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique photo ID" },
+        "userId": { "type": "string", "description": "ID of the user who saved the photo" },
+        "photoUrl": { "type": "string", "format": "uri", "description": "URL of the saved photo" },
+        "frameId": { "type": "string", "description": "ID of the frame used in the photo" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp of the photo" }
+      },
+      "required": ["userId", "photoUrl", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Product catalog documents"
+    },
+    "/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Customer reviews"
+    },
+    "/carts/{userId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "CartItem" }
+          },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "User shopping carts"
+    },
+    "/tryOnPhotos/{photoId}": {
+      "schema": "TryOnPhoto",
+      "description": "Saved virtual try-on photos"
+    }
+  }
+}
